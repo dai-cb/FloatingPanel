@@ -348,11 +348,12 @@ class FloatingPanel: NSObject, UIGestureRecognizerDelegate, UIScrollViewDelegate
     private func panningChange(with translation: CGPoint) {
         log.debug("panningChange")
 
-        let currentY = getCurrentY(from: initialFrame, with: translation)
+        let dy = translation.y - transOffsetY
+        let preY = surfaceView.frame.origin.y
+        let y = initialFrame.offsetBy(dx: 0.0, dy: dy).origin.y
+        let noTopBuffer = scrollView?.panGestureRecognizer.state == .changed && preY > 0 && preY > y
+        layoutAdapter.updateInteractiveTopConstraint(diff: dy, upperBuffer: !noTopBuffer)
 
-        var frame = initialFrame
-        frame.origin.y = currentY
-        surfaceView.frame = frame
         backdropView.alpha = getBackdropAlpha(with: translation)
 
         viewcontroller.delegate?.floatingPanelDidMove(viewcontroller)
@@ -434,13 +435,17 @@ class FloatingPanel: NSObject, UIGestureRecognizerDelegate, UIScrollViewDelegate
     private func startInteraction(with translation: CGPoint) {
         /* Don't lock a scroll view to show a scroll indicator after hitting the top */
         log.debug("startInteraction")
+
         initialFrame = surfaceView.frame
         if let scrollView = scrollView {
             initialScrollOffset = scrollView.contentOffset
         }
+
         transOffsetY = translation.y
 
         viewcontroller.delegate?.floatingPanelWillBeginDragging(viewcontroller)
+
+        layoutAdapter.startInteraction(at: state)
 
         if state == .full {
             viewcontroller.contentViewController?.view?.constraints.forEach({ (const) in
@@ -468,6 +473,8 @@ class FloatingPanel: NSObject, UIGestureRecognizerDelegate, UIScrollViewDelegate
         if targetPosition != .full {
             lockScrollView()
         }
+
+        layoutAdapter.endInteraction(at: targetPosition)
 
         if state == .full {
             viewcontroller.contentViewController?.view?.constraints.forEach({ (const) in
@@ -507,17 +514,13 @@ class FloatingPanel: NSObject, UIGestureRecognizerDelegate, UIScrollViewDelegate
 
     private func startAnimation(to targetPosition: FloatingPanelPosition, at distance: CGFloat, with velocity: CGPoint) {
         log.debug("startAnimation", targetPosition, distance, velocity)
-        let targetY = layoutAdapter.positionY(for: targetPosition)
+        
         let velocityVector = (distance != 0) ? CGVector(dx: 0, dy: max(min(velocity.y/distance, 30.0), -30.0)) : .zero
         let animator = behavior.interactionAnimator(self.viewcontroller, to: targetPosition, with: velocityVector)
         animator.addAnimations { [weak self] in
             guard let `self` = self else { return }
-            if self.state == targetPosition {
-                self.surfaceView.frame.origin.y = targetY
-                self.layoutAdapter.setBackdropAlpha(of: targetPosition)
-            } else {
-                self.updateLayout(to: targetPosition)
-            }
+            self.layoutAdapter.activateLayout(of: targetPosition)
+            self.layoutAdapter.setBackdropAlpha(of: targetPosition)
             self.state = targetPosition
         }
         animator.addCompletion { [weak self] pos in
@@ -535,6 +538,7 @@ class FloatingPanel: NSObject, UIGestureRecognizerDelegate, UIScrollViewDelegate
 
     private func finishAnimation(at targetPosition: FloatingPanelPosition) {
         log.debug("finishAnimation \(targetPosition)")
+
         self.animator = nil
         self.viewcontroller.delegate?.floatingPanelDidEndDecelerating(self.viewcontroller)
 
